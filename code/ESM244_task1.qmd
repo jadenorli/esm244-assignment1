@@ -1,0 +1,65 @@
+---
+title: "ESM 244 Task One"
+author: "Jaden Orli"
+date: last-modified
+execute: 
+  eval: true
+format:
+  html:
+    theme: minty
+    toc: true
+    toc-title: "Table of Contents:"
+editor:
+  chunk_output_type: inline
+embed-resources: true
+---
+
+# I. Background
+
+
+
+# II. Set Up
+
+## a) Load Libraries
+
+```{r}
+#this clears out the environment
+rm(list = ls())
+
+#load necessary data packages
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(here)
+library(lubridate)
+library(patchwork)
+
+```
+
+
+## b) Read Data
+
+```{r}
+#read in the xlsx file with the data on the amphibians 
+amphibians <- read_xlsx(here("data", "sierra_amphibians.xlsx"))
+
+#clean and tidy the data
+amphibians_clean <- amphibians %>%
+  rename_with(~ str_remove(., "^amphibian_")) %>% #remove the "amphibian_" portion from the column headers
+  mutate(year = lubridate::year(survey_date)) #create a new column with just the year
+  
+```
+
+
+
+```{r}
+#create a new dataframe with just the mountain yellow-legged frog (Rana muscosa)
+ramu <- amphibians_clean %>%
+  filter(species == "RAMU") %>% #only select the desired species (RAMU)
+  filter(life_stage != "EggMass") %>% #remove the rows where the life stage is egg mass 
+  select(species, life_stage, state, number, year) #select only the necessary columns 
+
+```
+
+
+
