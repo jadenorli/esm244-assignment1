@@ -59,7 +59,20 @@ ramu <- amphibians_clean %>%
   filter(life_stage != "EggMass") %>% #remove the rows where the life stage is egg mass 
   select(species, life_stage, state, number, year) #select only the necessary columns 
 
+#create a new dataframe with the summary of total individuals per year
+ramu_sum <- ramu %>%
+  group_by(year, life_stage) %>% #group the data by the year and life stage 
+  summarize(total_count = sum(number)) #calculate the total number of individuals seen in that year for each life stage
+
 ```
 
 
+```{r}
+#create a graph to visualize the number of mountain yellow-legged frogs of each life stage found for each year from 1995 to 2002
+ramu_life_year <- ggplot(ramu_sum, aes(x = year, y = total_count, group = life_stage)) +
+  geom_line(aes(color = life_stage))
+
+ramu_life_year
+  
+```
 
