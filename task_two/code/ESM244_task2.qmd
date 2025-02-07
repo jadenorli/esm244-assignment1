@@ -1,0 +1,424 @@
+---
+title: "Multiple Linear Regression Model Design to Predict Oxygen Saturation Levels"
+author: "Jaden Orli"
+date: last-modified
+bibliography: 
+ - ../code/references.bib
+execute: 
+  eval: true
+  message: false
+  warning: false 
+format:
+  html:
+    theme: minty
+    css: custom.css
+    toc: true
+    toc-title: "Table of Contents:"
+    code-fold: true
+editor:
+  chunk_output_type: inline
+embed-resources: true
+---
+
+# I. Background
+
+This analysis explores the relationship between oxygen saturation in seawater collected from California's coastal waters and various physical (ie. depth and temperature) and chemical (ie. salinity and phosphate concentration) variables. This data was collected by the California Collective Oceanic Fisheries Investigations (CalCOFI) which has been conducting these surveys via cruises since 1949 [@calcofi_2025]. This analysis focuses on [designing multiple linear regression models](#models) and [evaluating their performance](#selection) to create a [final parameterized model](#final).
+
+# II. Load Libraries
+
+Before beginning any analysis, we must load the necessary packages for this analysis. We will also set a seed to ensure future reproducibility.
+
+```{r setup}
+#clear out the environment
+rm(list = ls())
+
+#set the seed for reproducibility
+set.seed(42)
+
+#load necessary data packages
+library(tidyverse)
+library(AICcmodavg)
+library(here)
+library(kableExtra)
+library(equatiomatic)
+
+```
+
+
+Before moving forward, lets define the independent variable and the various explanatory variables:
+
+```{r variables}
+#create a dataframe with the variable table outputs 
+variable_table <- data.frame(Variable = c("Oxygen Saturation", "Temperature", "Salinity", "Depth", "Phosphate Concentration"),
+                             Name = c("o2sat", "t_deg_c", "salinity", "depth_m", "po4u_m"),
+                             Units = c("% saturation", "Celcius", "practical salinity scale", "meters", "μmoles/L"))
+
+#format the table into a kable
+variable_kable <- variable_table %>% 
+  kable("html",
+        caption = htmltools::tags$div(style = "text-align: center; font-size: 20px;",
+                                        htmltools::tags$strong("Variable Metadata"))) %>% 
+  kable_styling(full_width = FALSE, font_size = 14) %>% 
+  row_spec(row = 0, bold = TRUE) %>% 
+  kable_classic(html_font = "Times New Roman")
+  
+#print the kable
+variable_kable
+
+```
+
+
+# III. Define Functions
+
+Now we can define the functions used throughout the workflow:
+
+## a) Root Mean Square Error {#rmse}
+
+This function can be used to calculate the root mean square error (RMSE) between the actual value and the model predicted by the model. In this analysis, the root mean square error is used within the 10-fold cross validation to "score" each model.
+
+The input is:
+
+-   predicted: a vector, column, or value predicted by the model
+-   actual: a vector, column, or value that is observed or measured from the environment
+
+The output is:
+
+-   rmse: the root mean square error
+
+```{r rmse_func}
+#define a function to calculate the RMSE 
+rmse <- function(predicted, actual) {
+  
+  #calculate the residual sum of squares
+  rss <- (predicted - actual)^2 
+  
+  #calculate the mean square error
+  mse <- mean(rss)
+  
+  #calculate the root mean square error
+  rmse <- sqrt(mse)
+
+  #return the RMSE
+  return(rmse)
+}
+
+```
+
+## b) K-Fold Cross Validation {#kfold_cv}
+
+This function can be used to calculate the root mean square error (rmse) for the current fold in a k-fold cross validation process.
+
+The input is:
+
+-   i: the current fold out of k total folds
+-   df: the dataframe containing all the observations to be used in the cross validation
+-   formula: the formula used to create the model
+-   actual: the name of the independent variable column in the dataframe (df)
+
+The output is:
+
+-   rmse: the root mean square error
+
+```{r kfold_cv_func}
+#define a function to calculate RMSE for a single fold in a k-fold cross validation 
+kfold_cv <- function(i, df, formula, actual){
+  
+  #separate the df into test data
+  kfold_test <- df %>%
+    filter(group == i) #only select the group corresponding to the current fold iteration
+  
+  #separate the df into training data
+  kfold_train <- df %>%
+    filter(!group == i) #select the groups NOT corresponding to the current fold iteration
+  
+  #fit the linear model using the training dataset 
+  kfold_lm <- lm(formula, kfold_train)
+  
+  #get the predictions from the model
+  kfold_pred <- kfold_test %>%  
+    mutate(predicted = predict(kfold_lm, kfold_test)) #generate predictions
+  
+  #calculate the root mean square error for the model
+  kfold_rmse <- kfold_pred %>% 
+    summarize(rmse = rmse(predicted, #call on the predicted column
+                          kfold_test %>% pull(.data[[actual]]))) #pull the actual column values form the test dataframe
+  
+  #return the rmse
+  return(kfold_rmse$rmse)
+  
+}
+  
+```
+
+
+# IV. Multiple Linear Regression Models {#models}
+
+Now we can construct two multiple linear regression models. The two models are outlined below:
+
+```{=latex}
+\begin{aligned}
+1.\quad \text{o}_2\text{sat} &= \beta_0 + \beta_1 \cdot \text{t\_deg\_c} + \beta_2 \cdot \text{salinity} + \beta_3 \cdot \text{po4u\_m} + \epsilon \\
+2.\quad \text{o}_2\text{sat} &= \beta_0 + \beta_1 \cdot \text{t\_deg\_c} + \beta_2 \cdot \text{salinity} + \beta_3 \cdot \text{po4u\_m} + \beta_4 \cdot \text{depth\_m} + \epsilon
+\end{aligned}
+```
+
+
+## a) Read Data
+
+First we will load in the necessary data from CalCOFI and tidy up some of the column names.
+
+```{r data}
+#load the necessary data
+calcofi <- read_csv(here("task_two", "data", "calcofi_seawater.csv"))
+
+#clean and tidy the data the data
+calcofi <- calcofi %>%
+  drop_na() %>% #drop any NA's
+  rename(o2 = o2sat, #tidy the column names
+         temp = t_deg_c,
+         depth = depth_m,
+         po4 = po4u_m,
+         no2 = no2u_m)
+
+```
+
+## b) Model One
+
+The first model predicts oxygen saturation from the temperature, salinity, and phosphate concentration and is forumlated below:
+
+```{r model1}
+#define the formula for model one 
+f1 <- o2 ~ temp + salinity + po4
+
+#develop the linear regression model from formula one
+model1 <- lm(f1, data = calcofi)
+
+```
+
+## c) Model Two
+
+The second model builds off the first model, and predicts oxygen saturation from temperature, salinity, phosphate concentration, and depth and is formulated below:
+
+```{r model2}
+#define the formula for model one 
+f2 <- o2 ~ temp + salinity + depth + po4 
+
+#develop the linear regression model from formula one
+model2 <- lm(f2, data = calcofi)
+
+```
+
+
+# V. Model Selection {#selection}
+
+Now that we have developed the two multiple linear regression models, we will use three different metrics (AIC, BIC, and a 10-fold cross validation) to compare the model's ability to predict oxygen saturation.
+
+## a) AIC Comparisons
+
+Our first metric for comparison, is the Akaike Information Criterion (AIC) which balances parsimony and fit to prevent underfitting or overfitting the model to the data. The model with the *LOWER* AIC will be determined to be the favored model.
+
+```{r aic}
+#combine the two linear models into a list
+models <- list(model1, model2)
+
+#calculate the AIC for lm1 and lm2
+aic <- aictab(cand.set = models, 
+              modnames = c("Model 1", "Model 2"))
+
+```
+
+## b) BIC Comparisons
+
+Similar to AIC, the Bayesian Information Criterion (BIC) is another metric which can be used to compare model performance. The model with the *LOWER* BIC will be determined to be the favored model.
+
+```{r bic}
+#calculate the BIC for lm1 and lm2
+bic <- bictab(cand.set = models, 
+              modnames = c("Model 1", "Model 2"))
+
+```
+
+## c) Ten-Fold Cross Validation
+
+Finally, we can use a 10-fold cross validation to better hypertune the model parameters. This method is used to select a model by subsetting the original data into training data and testing data. The training data will be used to estimate the model parameters and then this parameterized model is tested on the testing data. This helps reduce overfitting the model by training and testing the model on different data.
+
+Since we are doing a 10-fold cross validation, this splitting process will be repeated 10 times and each time all of the observations are randomly assigned without replacement to be either part of the training data or the testing data. To compare these models, we will calculate the root mean square error (rmse) for each fold and then calcualte the mean RMSE.
+
+### i) Assigning Data to Folds
+
+The first step of this process is to randomly assign (without replacement) each observation from the CalCOFI data to a fold (ie. each observation is assigned to a group between 1-10). We will then verify that each of the folds has roughly the same number of observations.
+
+```{r folds}
+#determine the number of folds 
+total_folds <- 10 
+
+#assign an equal number of observations to each fold with the length of the calcofi df
+fold_vec <- rep(1:total_folds,
+                 length.out = nrow(calcofi))
+
+#randomly assign (without replacement) each observation to a fold
+calcofi_fold <- calcofi %>%
+  mutate(group = sample(fold_vec, #randomly shuffles the values
+                        size = n(),
+                        replace = FALSE)) #sample without replacement
+
+#create a table to verify that each fold has roughly the same amount of observations
+fold_table <- table(calcofi_fold$group)
+
+#convert the table to a dataframe to use in the kable
+fold_df <- as.data.frame(fold_table) %>%
+  pivot_wider(names_from = Var1, #pivot wider for an nice format in the final output
+              values_from = Freq)
+
+#rename the columns with the fold number
+colnames(fold_df) <- paste0("Fold ", colnames(fold_df))
+
+#generate a kable from the wider data
+fold_kable <-  fold_df %>% 
+  kable("html",
+        caption = htmltools::tags$div(style = "text-align: center; font-size: 20px;",
+                                        htmltools::tags$strong("Fold Observation Distribution"))) %>%
+  kable_styling(full_width = FALSE, font_size = 14) %>%
+  row_spec(row = 0, bold = TRUE) %>%
+  kable_classic(html_font = "Times New Roman")
+
+#print the kable
+fold_kable
+
+```
+
+### ii) Perform Cross Validation
+
+Now that we have ensured that there were equal splits in the folds, we can perform the cross validation.
+
+```{r cv}
+#perform a 10 fold cross validation 
+rmse_df <- data.frame(fold = 1:total_folds) %>% #create a column called fold with the same number of rows as folds
+  mutate(model1_rmse = map_dbl(fold, #the current fold
+                               kfold_cv, #call the kfold_cv function
+                               df = calcofi_fold, #call the folded dataframe
+                               formula = f1, #call the appropriate formula for model1
+                               actual = "o2"), #identify the actual values from the o2 column
+         model2_rmse = map_dbl(fold, #the current fold
+                               kfold_cv, #call the kfold_cv function
+                               df = calcofi_fold, #call the folded dataframe
+                               formula = f2, #call the appropriate formula for model2
+                               actual = "o2")) #identify the actual values from the o2
+
+#return the mean rmse for each model
+rmse_means <- rmse_df %>% 
+  summarize(across(ends_with('rmse'), mean))
+
+```
+
+## d) Compare Methods
+
+Finally, we can compare the various metrics (AIC, BIC, and 10-fold cross validation) to see if they all recommend the same model.
+
+### i) Combine Dataframes
+
+First, we will combine the dataframes:
+
+```{r combine}
+#create a dataframe from the aic results to be combined with the others
+aic_table <- aic %>%
+  rename(Model = Modnames, #rename the modnames column
+         Value = AICc) %>% #save the AIC values in a Value column
+  select(Model, Value) %>% #select the needed columns
+  mutate(Method = "AIC") %>%
+  mutate(Recommendation = ifelse(Value == min(Value), "Recommended", "Not Recommended")) #create a recommendataion column based on the model with the lowest AIC
+
+#create a dataframe from the bic results to be combined with the others
+bic_table <- bic %>%
+  rename(Model = Modnames, #rename the modnames column
+         Value = BIC) %>% #save the BIC values in a Value column
+  select(Model, Value) %>% #select the needed columns
+  mutate(Method = "BIC") %>% 
+  mutate(Recommendation = ifelse(Value == min(Value), "Recommended", "Not Recommended")) #create a recommendataion column based on the model with the lowest BIC
+
+#create a dataframe from the rmse cv results to be combined with the others
+rmse_table <- rmse_means %>%
+  pivot_longer(cols = ends_with("rmse"), #take the columns that end with rmse
+               names_to = "Model", #name the new name column Model
+               values_to = "Value") %>% #name the new value column Value
+  mutate(Method = "10 Fold CV") %>%
+  mutate(Model = ifelse(Model == "model1_rmse", "Model 1", "Model 2")) %>% 
+  mutate(Recommendation = ifelse(Value == min(Value), "Recommended", "Not Recommended")) #create a recommendataion column based on the model with the lowest RMSE
+
+#combine the three dataframes
+combined_table <- bind_rows(rmse_table, aic_table, bic_table) %>%
+  arrange(Model) %>% #arrange the order by Model
+  mutate(Value = round(Value, 2)) #only keep 2 decimal places for the values
+
+```
+
+### ii) Summary Table
+
+And then we can generate a summary table of the three methods.
+
+```{r summary}
+#create a kable with the AIC, BIC, and 10-fold cross validation results
+combined_kable <- combined_table %>%
+  kable("html",
+        caption = htmltools::tags$div(style = "text-align: center; font-size: 20px;",
+                                        htmltools::tags$strong("Model Comparisons"))) %>%
+  kable_styling(full_width = FALSE, font_size = 14) %>%
+  row_spec(row = 0, bold = TRUE) %>%
+  kable_classic(html_font = "Times New Roman")
+
+#print the kable results
+combined_kable
+
+```
+
+# VI. Final Model Selection {#final}
+
+All three model selection methods indicate that Model 2 is a better fit model. Now we can print the final parameterized model:
+
+```{r equation}
+#print the parameterized equation from model two
+extract_eq(model2, use_coefs = TRUE, wrap = TRUE)
+
+```
+
+Additionally, we can visualize the predictions from model two graphically. In the plot below, the actual oxygen saturation values are shown as an outlined circle and the model predictions are show in **<span style="background-color:#68838B; padding:2px;">darkslategray4</span>**
+
+```{r graph}
+#select 10% of the data to be used as testing data
+splitter <- sample(1:nrow(calcofi), size = round(0.1 * nrow(calcofi)), replace = FALSE)
+
+#create a training dataset with 90% of the data
+train_data <- calcofi[-splitter, ]
+
+#create a testing dataset with 10% of the data
+test_data <- calcofi[splitter, ] 
+
+#fit model two with the training data
+final_model <- lm(f2, data = train_data)
+
+#generate predicted o2 values from the final model for the test data
+test_data$predicted_o2 <- predict(final_model, test_data)
+
+#create the prediction plot from the test data
+ggplot(test_data, aes(x = o2, y = predicted_o2)) +
+  geom_point(aes(x = seq_along(o2), y = o2), #plot the actual results in black
+             shape = 1, size = 3, color = "black") +
+  geom_point(aes(x = seq_along(o2), y = predicted_o2), #plot the predicted results
+             shape = 16, size = 3, color = "darkslategray4") +
+  labs(title = "Model Two Predictions",
+       x = "Index", 
+       y = "Oxygen Saturation (%)") +
+  theme(plot.title = element_text(family = "Times New Roman",
+                                  face = "bold",
+                                  size = 16,
+                                  hjust = 0.5),
+        axis.title = element_text(family = "Times New Roman",
+                                  face = "bold",
+                                  size = 14),
+        axis.text.x = element_text(family = "Times New Roman",
+                                   size = 10),
+        axis.text.y = element_text(family = "Times New Roman", 
+                                   size = 10))
+
+```
+

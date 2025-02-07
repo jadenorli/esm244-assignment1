@@ -1,0 +1,249 @@
+---
+title: "Abundance Trends of Amphibians from the Southern Sierra Nevada Region"
+author: "Jaden Orli"
+date: last-modified
+bibliography: 
+ - ../code/references.bib
+execute: 
+  eval: true
+  message: false
+  warning: false 
+format:
+  html:
+    theme: minty
+    css: custom.css
+    toc: true
+    toc-title: "Table of Contents:"
+    code-fold: true
+editor:
+  chunk_output_type: inline
+embed-resources: true
+---
+
+# I. Background
+
+This analysis explores the abundance trends of the endangered Mountain Yellow-Legged frog (*Rana muscosa*) across various lakes in the southern Sierra Nevada region. This data was collected by the Sierra Lake Inventory Project (SLIP) between 1995-2002 during which time they surveyed over 8,000 lentic water bodies and described their physical characteristics and community structure [@knapp_2020]. This analysis focuses on [visualizing annual trend in abundance by life stage](#vis_one) and the [lakes with the highest abundance of adults and subadults](#vis_two).
+
+# II. Set Up
+
+Before we can begin the analysis, we need to load in the necessary packages for this project and read in the required data. 
+
+## a) Load Libraries
+
+```{r setup}
+#this clears out the environment
+rm(list = ls())
+
+#load necessary data packages
+library(tidyverse)
+library(readxl)
+library(stringr)
+library(here)
+library(lubridate)
+library(scales)
+library(patchwork)
+library(ggtext)
+
+```
+
+
+## b) Read Data
+
+```{r read_data}
+#read in the xlsx file with the data on the amphibians 
+amphibians <- read_xlsx(here("task_one", "data", "sierra_amphibians.xlsx"))
+
+#clean and tidy the data
+amphibians_clean <- amphibians %>%
+  rename_with(~ str_remove(., "^amphibian_")) %>% #remove the "amphibian_" portion from the column headers
+  mutate(year = lubridate::year(survey_date)) #create a new column with just the year
+  
+```
+
+
+# III. Visualization One {#vis_one}
+
+Now we can start to visualize the trends in the annual abundance recorded for each of the life stages (excluding the egg mass stage) of the Mountain Yellow-Legged frog.
+
+## a) Clean Data
+
+```{r clean_data_one}
+#create a new dataframe with just the mountain yellow-legged frog (Rana muscosa)
+ramu_one <- amphibians_clean %>%
+  filter(species == "RAMU") %>% #only select the desired species (RAMU)
+  filter(life_stage != "EggMass") %>% #remove the rows where the life stage is egg mass 
+  select(species, life_stage, state, number, year) #select only the necessary columns 
+
+#create a new dataframe with the summary of total individuals per year
+ramu_sum_one <- ramu_one %>%
+  group_by(year, life_stage) %>% #group the data by the year and life stage 
+  summarize(total_count = sum(number)) #calculate the total number of individuals seen in that year for each life stage
+
+```
+
+
+## b) Abundance by Year
+
+```{r graph_one}
+#create a graph to visualize the number of mountain yellow-legged frogs of each life stage found for each year from 1995 to 2002
+plot_one <- ggplot(ramu_sum_one, aes(x = factor(year), y = total_count, group = life_stage)) +
+  geom_point(aes(color = life_stage),
+             size = 1,
+             show.legend = TRUE) +
+  geom_line(aes(color = life_stage),
+            size = 1,
+            show.legend = TRUE) +
+  labs(subtitle = "Per Year by Life Stage",
+       x = "Year",
+       y = "Total Count") +
+  scale_color_manual(name = "Life Stage", 
+                     values = c("Adult" = "darkgoldenrod1", 
+                                "SubAdult" = "coral1", 
+                                "Tadpole" = "cyan3")) +
+  scale_y_continuous(labels = scales::comma) +
+  theme(plot.subtitle = element_text(family = "Times New Roman",
+                                     size = 12,
+                                     hjust = 0.5),
+        axis.title = element_text(family = "Times New Roman",
+                                  face = "bold",
+                                  size = 14),
+        axis.text.x = element_text(family = "Times New Roman",
+                                   size = 10,
+                                   angle = 45,
+                                   hjust = 1,
+                                   vjust = 1),
+        axis.text.y = element_text(family = "Times New Roman", 
+                                   size = 10),
+        legend.title = element_text(family = "Times New Roman",
+                                    face = "bold",
+                                    size = 10),
+        legend.text = element_text(family = "Times New Roman",
+                                   size = 10),
+        legend.box.background = element_rect(color = "black", size = 1))
+
+#finish formatting the plot to stand alone
+ramu_life_year <- plot_one +
+  labs(title = expression("Total Counts of Mountain<br>Yellow-Legged Frog (<i>Rana muscosa</i>):")) +
+  theme(plot.title = element_markdown(family = "Times New Roman", 
+                                      face = "bold",
+                                      size = 16,
+                                      hjust = 0.5))
+
+#print the graph
+ramu_life_year
+  
+```
+
+# IV. Visualization Two {#vis_two}
+
+Then we just focused on the adult and subadult life stages and determined the five lakes which has the greatest number of individuals across all of the years. 
+
+## a) Clean Data
+
+```{r clean_data_two}
+#create a new dataframe with just the mountain yellow-legged frog (Rana muscosa)
+ramu_two <- amphibians_clean %>%
+  filter(species == "RAMU") %>% #only select the desired species (RAMU)
+  filter(life_stage %in% c("Adult", "SubAdult")) %>% #only keep the adults and subadults
+  select(lake_id, species, life_stage, state, number, year) #select only the necessary columns 
+
+#create a new dataframe with the summary of the total number of individuals (adults and subadults) in the five most populated lakes
+ramu_sum_two <- ramu_two %>%
+  group_by(lake_id) %>% #group by the lake id 
+  summarize(total_count = sum(number)) %>% #get the total counts for each lake
+  slice_max(total_count, n = 5, with_ties = TRUE) %>% #only keep the 5 most populated lakes (allowing ties)
+  mutate(lake_id = factor(lake_id), #format the lake_id as a factor
+         lake_id = fct_reorder(lake_id, total_count, .desc = TRUE)) #order the data in descending order
+
+```
+
+
+## b) Abundance by Lake
+
+```{r graph_two}
+#create a bar graph with total counts (over all years of the study) of adults and subadults in the 5 most populated takes 
+plot_two <- ggplot(ramu_sum_two, aes(x = factor(lake_id), y = total_count, fill = "chocolate2")) +
+  geom_col(aes(x = factor(lake_id), y = total_count),
+           show.legend = TRUE) +
+  scale_fill_manual(values = c("chocolate2"),
+                    labels = "Adults + SubAdults",
+                    name = NULL) +
+  geom_text(aes(label = total_count), 
+            vjust = -0.3, 
+            size = 2.5, 
+            family = "Times New Roman",
+            fontface = "bold") +
+  labs(subtitle = "Five Most Populated Lakes",
+       x = "Lake ID",
+       y = "Total Count") +
+  theme(plot.subtitle = element_text(family = "Times New Roman",
+                                     size = 12,
+                                     hjust = 0.5),
+        axis.title = element_text(family = "Times New Roman",
+                                  face = "bold",
+                                  size = 14),
+        axis.text.x = element_text(family = "Times New Roman",
+                                   size = 10,
+                                   angle = 45,
+                                   hjust = 1,
+                                   vjust = 1),
+        axis.text.y = element_text(family = "Times New Roman", 
+                                   size = 10),
+        legend.title = element_text(family = "Times New Roman",
+                                    face = "bold",
+                                    size = 12),
+        legend.text = element_text(family = "Times New Roman",
+                                   size = 10))
+  
+#finish formatting the plot to stand alone
+ramu_life_lake <- plot_two +
+  labs(title = expression("Total Counts of Mountain<br>Yellow-Legged Frog (<i>Rana muscosa</i>):")) +
+  theme(plot.title = element_markdown(family = "Times New Roman", 
+                                  face = "bold",
+                                  size = 16,
+                                  hjust = 0.5),
+        legend.position = "none")
+
+#print the graph 
+ramu_life_lake
+  
+```
+
+
+# V. Combine Plots {#combined}
+
+Finally, we can combine the above plots into a single complex figure: 
+
+```{r combined_plot}
+#create a visualization from a combination of the two plots
+combined <- plot_one + plot_two + 
+  plot_layout(ncol = 2,
+              guides = "collect",
+              axes = "collect") + 
+  plot_annotation(title = expression("Mountain Yellow-Legged Frog<br>(<i>Rana muscosa</i>) Abundance Trends"),
+                  caption = expression("Abundance trends of the endangered Mountain Yellow-Legged Frog (<i>Rana muscosa</i>) across life stages; highlighting the <b>A.</b> annual<br> counts of adults, subadults, and tadpoles as well as the <b>B.</b> the total abundance of adults and subadults for the five most populated<br> lakes in the southern Sierra Nevada."),
+                  tag_levels = "A",
+                  tag_suffix = ".") &
+  theme(plot.title = element_markdown(family = "Times New Roman",
+                                      face = "bold",
+                                      size = 20,
+                                      hjust = 0.5),
+        legend.position = "right",
+        legend.title = element_text(family = "Times New Roman",
+                                    face = "bold",
+                                    size = 12),
+        legend.text = element_text(family = "Times New Roman",
+                                   size = 10),
+        plot.tag = element_text(family = "Times New Roman", 
+                                face = "bold", 
+                                size = 16),
+        plot.caption = element_markdown(family = "Times New Roman",
+                                        size = 9,
+                                        hjust = 0.5,
+                                        margin = margin(t = 10, r = 20, b = 10, l = 20)))
+
+#print the combined plot
+combined
+
+```
+
